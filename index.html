@@ -2,24 +2,96 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Localhost GitHub Host</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Browser Localhost Simulator</title>
+<style>
+  body { font-family: Arial, sans-serif; padding: 20px; background: #f5f5f5; }
+  h1 { text-align: center; }
+  input, button { padding: 10px; font-size: 16px; margin: 5px 0; width: 100%; max-width: 500px; }
+  iframe { width: 100%; height: 500px; border: 1px solid #ccc; margin-top: 20px; }
+  #url { margin-top: 10px; font-weight: bold; color: #333; }
+  #status { color: red; }
+</style>
 </head>
 <body>
-<h1>GitHub Repo to Localhost</h1>
-<input type="text" id="repo" placeholder="Enter GitHub repo URL">
-<button onclick="submitRepo()">Host Repo</button>
-<p id="status"></p>
+<h1>Browser Localhost Simulator</h1>
+
+<input type="text" id="repoUrl" placeholder="Enter GitHub repo URL (public)">
+<button onclick="loadRepo()">Load Repo</button>
+
+<div id="status"></div>
+<div id="url"></div>
+<iframe id="preview"></iframe>
 
 <script>
-function submitRepo() {
-  const repo = document.getElementById('repo').value;
-  fetch(`http://localhost:3000/fetch?repo=${encodeURIComponent(repo)}`)
-    .then(res => res.json())
-    .then(data => {
-      document.getElementById('status').textContent = 
-        `Your local URL: ${data.localUrl}`;
-    })
-    .catch(err => console.error(err));
+async function loadRepo() {
+    const repoUrl = document.getElementById('repoUrl').value.trim();
+    const status = document.getElementById('status');
+    const urlDiv = document.getElementById('url');
+    const preview = document.getElementById('preview');
+
+    status.textContent = '';
+    urlDiv.textContent = '';
+    preview.srcdoc = '';
+
+    if (!repoUrl) {
+        status.textContent = 'Please enter a GitHub repo URL.';
+        return;
+    }
+
+    // Extract user/repo from URL
+    const match = repoUrl.match(/github\.com\/([^\/]+)\/([^\/]+)/);
+    if (!match) {
+        status.textContent = 'Invalid GitHub repo URL.';
+        return;
+    }
+
+    const user = match[1];
+    const repo = match[2];
+
+    try {
+        status.textContent = 'Fetching files...';
+
+        // Fetch the repo contents
+        const apiUrl = `https://api.github.com/repos/${user}/${repo}/contents/`;
+        const response = await fetch(apiUrl);
+        if (!response.ok) throw new Error('Failed to fetch repo contents');
+
+        const files = await response.json();
+        let htmlContent = '';
+
+        // Look for index.html first
+        const indexFile = files.find(f => f.name.toLowerCase() === 'index.html');
+        if (!indexFile) throw new Error('No index.html found in repo');
+
+        // Fetch index.html content
+        const indexResp = await fetch(indexFile.download_url);
+        htmlContent = await indexResp.text();
+
+        // Optional: Inline all CSS and JS from the repo
+        for (const file of files) {
+            if (file.name.endsWith('.css')) {
+                const cssResp = await fetch(file.download_url);
+                const cssText = await cssResp.text();
+                htmlContent = `<style>${cssText}</style>` + htmlContent;
+            }
+            if (file.name.endsWith('.js')) {
+                const jsResp = await fetch(file.download_url);
+                const jsText = await jsResp.text();
+                htmlContent += `<script>${jsText}<\/script>`;
+            }
+        }
+
+        // Render in iframe
+        preview.srcdoc = htmlContent;
+        urlDiv.textContent = `Permanent localhost-style URL: http://localhost/${repo}`;
+        status.textContent = 'Loaded successfully!';
+        status.style.color = 'green';
+
+    } catch (err) {
+        status.textContent = 'Error: ' + err.message;
+        status.style.color = 'red';
+    }
 }
 </script>
 </body>
