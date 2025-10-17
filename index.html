@@ -3,96 +3,113 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Browser Localhost Simulator</title>
+<title>WebContainer Localhost Host</title>
 <style>
   body { font-family: Arial, sans-serif; padding: 20px; background: #f5f5f5; }
-  h1 { text-align: center; }
-  input, button { padding: 10px; font-size: 16px; margin: 5px 0; width: 100%; max-width: 500px; }
+  input, button { padding: 10px; font-size: 16px; width: 100%; max-width: 500px; margin: 5px 0; }
   iframe { width: 100%; height: 500px; border: 1px solid #ccc; margin-top: 20px; }
-  #url { margin-top: 10px; font-weight: bold; color: #333; }
-  #status { color: red; }
+  #status { margin-top: 10px; font-weight: bold; }
 </style>
 </head>
 <body>
-<h1>Browser Localhost Simulator</h1>
+<h1>WebContainer Localhost Simulator</h1>
 
-<input type="text" id="repoUrl" placeholder="Enter GitHub repo URL (public)">
-<button onclick="loadRepo()">Load Repo</button>
+<input type="text" id="repoUrl" placeholder="Enter public GitHub repo URL">
+<button id="startBtn">Start Server</button>
 
 <div id="status"></div>
-<div id="url"></div>
 <iframe id="preview"></iframe>
 
-<script>
-async function loadRepo() {
-    const repoUrl = document.getElementById('repoUrl').value.trim();
-    const status = document.getElementById('status');
-    const urlDiv = document.getElementById('url');
-    const preview = document.getElementById('preview');
+<script type="module">
+import { WebContainer } from 'https://cdn.jsdelivr.net/npm/@webcontainer/api@1.0.0/dist/webcontainer.js';
 
-    status.textContent = '';
-    urlDiv.textContent = '';
-    preview.srcdoc = '';
+const statusEl = document.getElementById('status');
+const preview = document.getElementById('preview');
+const startBtn = document.getElementById('startBtn');
 
-    if (!repoUrl) {
-        status.textContent = 'Please enter a GitHub repo URL.';
-        return;
+let webcontainerInstance;
+
+startBtn.onclick = async () => {
+  const repoUrl = document.getElementById('repoUrl').value.trim();
+  if (!repoUrl) {
+    statusEl.textContent = 'Enter a GitHub repo URL';
+    return;
+  }
+
+  statusEl.textContent = 'Booting WebContainer...';
+
+  // Start WebContainer
+  webcontainerInstance = await WebContainer.boot();
+
+  // Minimal package.json for Node.js server
+  await webcontainerInstance.fs.writeFile('/package.json', JSON.stringify({
+    name: 'webcontainer-localhost',
+    type: 'module',
+    scripts: { start: 'node index.js' },
+    dependencies: { express: '^4.18.2', 'node-fetch': '^3.3.2' }
+  }));
+
+  // index.js server code inside the WebContainer
+  const serverCode = `
+import express from "express";
+import fetch from "node-fetch";
+import fs from "fs";
+import path from "path";
+
+const app = express();
+const PORT = 3000;
+app.use(express.static('./'));
+
+// Endpoint to clone repo
+app.get("/clone", async (req, res) => {
+  const repoUrl = req.query.repo;
+  if (!repoUrl) return res.status(400).send("No repo provided");
+
+  try {
+    const match = repoUrl.match(/github\\.com\\/([^\\/]+)\\/([^\\/]+)/);
+    if (!match) throw new Error("Invalid GitHub repo URL");
+    const user = match[1], repo = match[2];
+    const apiUrl = \`https://api.github.com/repos/\${user}/\${repo}/contents/\`;
+    const response = await fetch(apiUrl);
+    if (!response.ok) throw new Error("Failed to fetch repo");
+    const files = await response.json();
+
+    for (const file of files) {
+      if(file.type==="file") {
+        const contentResp = await fetch(file.download_url);
+        const content = await contentResp.text();
+        fs.writeFileSync(path.join('./', file.name), content);
+      }
     }
+    res.send(\`Repo \${repo} cloned. Visit /index.html\`);
+  } catch(e){ res.status(500).send(e.message) }
+});
 
-    // Extract user/repo from URL
-    const match = repoUrl.match(/github\.com\/([^\/]+)\/([^\/]+)/);
-    if (!match) {
-        status.textContent = 'Invalid GitHub repo URL.';
-        return;
-    }
+app.listen(PORT, ()=> console.log("Server running on port", PORT));
+`;
 
-    const user = match[1];
-    const repo = match[2];
+  await webcontainerInstance.fs.writeFile('/index.js', serverCode);
 
-    try {
-        status.textContent = 'Fetching files...';
+  statusEl.textContent = 'Installing dependencies...';
+  await webcontainerInstance.spawn('npm', ['install']);
 
-        // Fetch the repo contents
-        const apiUrl = `https://api.github.com/repos/${user}/${repo}/contents/`;
-        const response = await fetch(apiUrl);
-        if (!response.ok) throw new Error('Failed to fetch repo contents');
+  statusEl.textContent = 'Starting server...';
+  const serverProcess = await webcontainerInstance.spawn('npm', ['start'], { stdout: true, stderr: true });
 
-        const files = await response.json();
-        let htmlContent = '';
+  serverProcess.output.pipeTo(new WritableStream({
+    write(data) { console.log(data); }
+  }));
 
-        // Look for index.html first
-        const indexFile = files.find(f => f.name.toLowerCase() === 'index.html');
-        if (!indexFile) throw new Error('No index.html found in repo');
+  // Get the server URL in WebContainer
+  const serverUrl = await webcontainerInstance.url(3000);
+  statusEl.textContent = `Server running at: ${serverUrl}`;
 
-        // Fetch index.html content
-        const indexResp = await fetch(indexFile.download_url);
-        htmlContent = await indexResp.text();
+  // Optionally auto-clone the repo
+  await fetch(`${serverUrl}/clone?repo=${encodeURIComponent(repoUrl)}`);
 
-        // Optional: Inline all CSS and JS from the repo
-        for (const file of files) {
-            if (file.name.endsWith('.css')) {
-                const cssResp = await fetch(file.download_url);
-                const cssText = await cssResp.text();
-                htmlContent = `<style>${cssText}</style>` + htmlContent;
-            }
-            if (file.name.endsWith('.js')) {
-                const jsResp = await fetch(file.download_url);
-                const jsText = await jsResp.text();
-                htmlContent += `<script>${jsText}<\/script>`;
-            }
-        }
-
-        // Render in iframe
-        preview.srcdoc = htmlContent;
-        urlDiv.textContent = `Permanent localhost-style URL: http://localhost/${repo}`;
-        status.textContent = 'Loaded successfully!';
-        status.style.color = 'green';
-
-    } catch (err) {
-        status.textContent = 'Error: ' + err.message;
-        status.style.color = 'red';
-    }
-}
+  // Preview index.html from the repo
+  preview.src = `${serverUrl}/index.html`;
+};
 </script>
 </body>
 </html>
