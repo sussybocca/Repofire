@@ -3,113 +3,98 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>WebContainer Localhost Host</title>
+<title>GitHub → Netlify Deploy</title>
 <style>
-  body { font-family: Arial, sans-serif; padding: 20px; background: #f5f5f5; }
-  input, button { padding: 10px; font-size: 16px; width: 100%; max-width: 500px; margin: 5px 0; }
-  iframe { width: 100%; height: 500px; border: 1px solid #ccc; margin-top: 20px; }
-  #status { margin-top: 10px; font-weight: bold; }
+body { font-family: Arial; padding: 20px; background: #f0f0f0; }
+input, button { width: 100%; max-width: 400px; padding: 10px; margin: 5px 0; }
+iframe { width: 100%; height: 400px; border: 1px solid #ccc; margin-top: 20px; }
+#status { margin-top: 10px; font-weight: bold; color: green; }
+#error { margin-top: 10px; font-weight: bold; color: red; }
+#hiddenGitHub { position: fixed; bottom: 10px; left: 10px; font-size: 12px; }
+#hiddenGitHub input { width: 200px; }
 </style>
 </head>
 <body>
-<h1>WebContainer Localhost Simulator</h1>
 
-<input type="text" id="repoUrl" placeholder="Enter public GitHub repo URL">
-<button id="startBtn">Start Server</button>
+<h1>GitHub → Netlify One-Click Deploy</h1>
+
+<p>Step 1: Enter Netlify Access Token</p>
+<input type="text" id="netlifyToken" placeholder="Enter Netlify Personal Access Token">
+<button onclick="deploySite()">Run & Deploy</button>
 
 <div id="status"></div>
+<div id="error"></div>
 <iframe id="preview"></iframe>
 
-<script type="module">
-import { WebContainer } from 'https://cdn.jsdelivr.net/npm/@webcontainer/api@1.0.0/dist/webcontainer.js';
+<!-- Hidden corner for GitHub repo input -->
+<div id="hiddenGitHub">
+  <label>Paste GitHub URL: </label>
+  <input type="text" id="githubUrl" placeholder="https://github.com/user/repo">
+  <button onclick="fetchRepo()">Initialize Repo</button>
+</div>
 
-const statusEl = document.getElementById('status');
-const preview = document.getElementById('preview');
-const startBtn = document.getElementById('startBtn');
+<script>
+let siteFiles = {};
 
-let webcontainerInstance;
+async function fetchRepo() {
+  const url = document.getElementById('githubUrl').value.trim();
+  const status = document.getElementById('status');
+  const error = document.getElementById('error');
+  status.textContent = '';
+  error.textContent = '';
 
-startBtn.onclick = async () => {
-  const repoUrl = document.getElementById('repoUrl').value.trim();
-  if (!repoUrl) {
-    statusEl.textContent = 'Enter a GitHub repo URL';
-    return;
-  }
-
-  statusEl.textContent = 'Booting WebContainer...';
-
-  // Start WebContainer
-  webcontainerInstance = await WebContainer.boot();
-
-  // Minimal package.json for Node.js server
-  await webcontainerInstance.fs.writeFile('/package.json', JSON.stringify({
-    name: 'webcontainer-localhost',
-    type: 'module',
-    scripts: { start: 'node index.js' },
-    dependencies: { express: '^4.18.2', 'node-fetch': '^3.3.2' }
-  }));
-
-  // index.js server code inside the WebContainer
-  const serverCode = `
-import express from "express";
-import fetch from "node-fetch";
-import fs from "fs";
-import path from "path";
-
-const app = express();
-const PORT = 3000;
-app.use(express.static('./'));
-
-// Endpoint to clone repo
-app.get("/clone", async (req, res) => {
-  const repoUrl = req.query.repo;
-  if (!repoUrl) return res.status(400).send("No repo provided");
+  if (!url) return alert('Enter a GitHub URL');
 
   try {
-    const match = repoUrl.match(/github\\.com\\/([^\\/]+)\\/([^\\/]+)/);
-    if (!match) throw new Error("Invalid GitHub repo URL");
-    const user = match[1], repo = match[2];
-    const apiUrl = \`https://api.github.com/repos/\${user}/\${repo}/contents/\`;
-    const response = await fetch(apiUrl);
-    if (!response.ok) throw new Error("Failed to fetch repo");
-    const files = await response.json();
+    status.textContent = 'Fetching repo files...';
+    const res = await fetch('http://localhost:3000/fetch-repo', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ repoUrl: url })
+    });
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
 
-    for (const file of files) {
-      if(file.type==="file") {
-        const contentResp = await fetch(file.download_url);
-        const content = await contentResp.text();
-        fs.writeFileSync(path.join('./', file.name), content);
-      }
+    siteFiles = data;
+    status.textContent = `Repo initialized with ${Object.keys(siteFiles).length} files. Ready to deploy.`;
+    if (siteFiles['index.html']) {
+      document.getElementById('preview').srcdoc = siteFiles['index.html'];
     }
-    res.send(\`Repo \${repo} cloned. Visit /index.html\`);
-  } catch(e){ res.status(500).send(e.message) }
-});
 
-app.listen(PORT, ()=> console.log("Server running on port", PORT));
-`;
+  } catch (e) {
+    error.textContent = e.message;
+  }
+}
 
-  await webcontainerInstance.fs.writeFile('/index.js', serverCode);
+async function deploySite() {
+  const token = document.getElementById('netlifyToken').value.trim();
+  const status = document.getElementById('status');
+  const error = document.getElementById('error');
+  const preview = document.getElementById('preview');
+  status.textContent = '';
+  error.textContent = '';
 
-  statusEl.textContent = 'Installing dependencies...';
-  await webcontainerInstance.spawn('npm', ['install']);
+  if (!token) return alert('Enter Netlify token');
+  if (!siteFiles || !siteFiles['index.html']) return alert('No site files found. Initialize GitHub repo first.');
 
-  statusEl.textContent = 'Starting server...';
-  const serverProcess = await webcontainerInstance.spawn('npm', ['start'], { stdout: true, stderr: true });
+  try {
+    status.textContent = 'Deploying to Netlify...';
+    const res = await fetch('http://localhost:3000/deploy', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ netlifyToken: token, siteFiles })
+    });
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
 
-  serverProcess.output.pipeTo(new WritableStream({
-    write(data) { console.log(data); }
-  }));
+    status.textContent = `Site deployed: ${data.url}`;
+    preview.src = data.url;
 
-  // Get the server URL in WebContainer
-  const serverUrl = await webcontainerInstance.url(3000);
-  statusEl.textContent = `Server running at: ${serverUrl}`;
-
-  // Optionally auto-clone the repo
-  await fetch(`${serverUrl}/clone?repo=${encodeURIComponent(repoUrl)}`);
-
-  // Preview index.html from the repo
-  preview.src = `${serverUrl}/index.html`;
-};
+  } catch (e) {
+    error.textContent = e.message;
+  }
+}
 </script>
+
 </body>
 </html>
