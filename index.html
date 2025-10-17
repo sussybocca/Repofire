@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Localhost GitHub Host</title>
+</head>
+<body>
+<h1>GitHub Repo to Localhost</h1>
+<input type="text" id="repo" placeholder="Enter GitHub repo URL">
+<button onclick="submitRepo()">Host Repo</button>
+<p id="status"></p>
+
+<script>
+function submitRepo() {
+  const repo = document.getElementById('repo').value;
+  fetch(`http://localhost:3000/fetch?repo=${encodeURIComponent(repo)}`)
+    .then(res => res.json())
+    .then(data => {
+      document.getElementById('status').textContent = 
+        `Your local URL: ${data.localUrl}`;
+    })
+    .catch(err => console.error(err));
+}
+</script>
+</body>
+</html>
